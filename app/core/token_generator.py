@@ -1,7 +1,7 @@
 import secrets
 import hashlib
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -13,14 +13,18 @@ def generate_verification_token() -> str:
     
     Returns:
         A URL-safe token string
+    
+    Raises:
+        RuntimeError: If token generation fails
     """
     try:
+        logger.info("Generating verification token")
         token = secrets.token_urlsafe(32)
-        logger.debug("Verification token generated successfully")
+        logger.info("Verification token generated successfully")
         return token
     except Exception as e:
-        logger.error(f"Error generating verification token: {str(e)}")
-        raise
+        logger.error(f"Failed to generate verification token: {str(e)}")
+        raise RuntimeError("Token generation failed") from e
 
 
 def generate_reset_token() -> str:
@@ -29,14 +33,18 @@ def generate_reset_token() -> str:
     
     Returns:
         A URL-safe token string
+    
+    Raises:
+        RuntimeError: If token generation fails
     """
     try:
+        logger.info("Generating reset token")
         token = secrets.token_urlsafe(32)
-        logger.debug("Reset token generated successfully")
+        logger.info("Reset token generated successfully")
         return token
     except Exception as e:
-        logger.error(f"Error generating reset token: {str(e)}")
-        raise
+        logger.error(f"Failed to generate reset token: {str(e)}")
+        raise RuntimeError("Token generation failed") from e
 
 
 def get_token_expiry(hours: int = 24) -> datetime:
@@ -49,7 +57,7 @@ def get_token_expiry(hours: int = 24) -> datetime:
     Returns:
         datetime object representing token expiry time
     """
-    return datetime.utcnow() + timedelta(hours=hours)
+    return datetime.now(timezone.utc) + timedelta(hours=hours)
 
 
 def is_token_expired(expiry_time: Optional[datetime]) -> bool:
@@ -64,4 +72,7 @@ def is_token_expired(expiry_time: Optional[datetime]) -> bool:
     """
     if not expiry_time:
         return True
-    return datetime.utcnow() > expiry_time
+    current_time = datetime.now(timezone.utc)
+    if expiry_time.tzinfo is None:
+        expiry_time = expiry_time.replace(tzinfo=timezone.utc)
+    return current_time > expiry_time

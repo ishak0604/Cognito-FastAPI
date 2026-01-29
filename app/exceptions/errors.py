@@ -59,29 +59,85 @@ class EmailNotVerified(AuthException):
 class InvalidToken(AuthException):
     """Raised when verification or reset token is invalid."""
     def __init__(self, token_type: str = "token"):
-        if token_type == "verification token":
-            message = "Verification link has expired or is invalid. Please request a new verification email."
-        elif token_type == "reset token":
-            message = "Password reset link has expired. Please request a new password reset link."
-        else:
-            message = f"Invalid or expired {token_type}. Please try again."
+        try:
+            if token_type == "verification token":
+                message = "Verification link has expired or is invalid. Please request a new verification email."
+            elif token_type == "reset token":
+                message = "Password reset link has expired. Please request a new password reset link."
+            else:
+                message = f"Invalid or expired {token_type}. Please try again."
 
-        super().__init__(
-            message=message,
-            error_code="INVALID_TOKEN",
-            status_code=400
-        )
+            super().__init__(
+                message=message,
+                error_code="INVALID_TOKEN",
+                status_code=400
+            )
+        except Exception:
+            # Fallback initialization
+            self.message = f"Invalid or expired {token_type}. Please try again."
+            self.error_code = "INVALID_TOKEN"
+            self.status_code = 400
+            self.details = {}
+            Exception.__init__(self, self.message)
 
 
 class ValidationError(AuthException):
     """Raised when validation fails."""
     def __init__(self, message: str, details: dict = None):
-        super().__init__(
-            message=message,
-            error_code="VALIDATION_ERROR",
-            status_code=422,
-            details=details or {}
-        )
+        try:
+            super().__init__(
+                message=message,
+                error_code="VALIDATION_ERROR",
+                status_code=422,
+                details=details or {}
+            )
+        except Exception:
+            # Fallback initialization if parent init fails
+            self.message = message
+            self.error_code = "VALIDATION_ERROR"
+            self.status_code = 422
+            self.details = details or {}
+            Exception.__init__(self, message)
+
+
+def _format_missing_field_error(field: str) -> str:
+    """Format missing field error message."""
+    field_messages = {
+        "email": "Email is required",
+        "password": "Password is required",
+        "token": "Token is required"
+    }
+    return field_messages.get(field, f"{field.replace('_', ' ').title()} is required")
+
+
+def _format_length_error(field: str, msg: str) -> str:
+    """Format length validation error message."""
+    if field == "password":
+        return "Password must be at least 8 characters"
+    elif field == "email":
+        return "Email cannot be empty"
+    elif field == "token":
+        return "Token cannot be empty"
+    return msg
+
+
+def _format_value_error(field: str, msg: str) -> str:
+    """Format value validation error message."""
+    error_mappings = {
+        "Email cannot be empty": "Email cannot be empty",
+        "Password cannot be empty": "Password cannot be empty",
+        "Token cannot be empty": "Token cannot be empty",
+        "Email format is invalid": "Email format is invalid. Use format: user@example.com",
+        "Password must be at least 8 characters": "Password must be at least 8 characters",
+        "Password must contain at least one uppercase letter": "Password must contain at least one uppercase letter (A-Z)",
+        "Password must contain at least one number": "Password must contain at least one number (0-9)"
+    }
+    
+    for key, value in error_mappings.items():
+        if key in msg:
+            return value
+    
+    return msg
 
 
 def format_validation_errors(exc_errors: list) -> tuple[dict, int]:
@@ -94,55 +150,28 @@ def format_validation_errors(exc_errors: list) -> tuple[dict, int]:
     Returns:
         tuple: (error_details_dict, status_code)
     """
+    if not exc_errors:
+        return {}, 422
+    
     errors = {}
 
     for error in exc_errors:
-        field = str(error["loc"][-1]) if error["loc"] else "unknown"
-        error_type = error["type"]
-        msg = error["msg"]
+        try:
+            field = str(error["loc"][-1]) if error.get("loc") else "unknown"
+            error_type = error.get("type", "unknown")
+            msg = error.get("msg", "Validation error")
 
-        if error_type == "missing":
-            if field == "email":
-                errors[field] = "Email is required"
-            elif field == "password":
-                errors[field] = "Password is required"
-            elif field == "token":
-                errors[field] = "Token is required"
-            else:
-                errors[field] = f"{field.replace('_', ' ').title()} is required"
-
-        elif "at least" in msg.lower() and "character" in msg.lower():
-            if field == "password":
-                errors[field] = "Password must be at least 8 characters"
-            elif field == "email":
-                errors[field] = "Email cannot be empty"
-            elif field == "token":
-                errors[field] = "Token cannot be empty"
+            if error_type == "missing":
+                errors[field] = _format_missing_field_error(field)
+            elif "at least" in msg.lower() and "character" in msg.lower():
+                errors[field] = _format_length_error(field, msg)
+            elif error_type == "value_error":
+                errors[field] = _format_value_error(field, msg)
             else:
                 errors[field] = msg
-
-        elif error_type == "value_error":
-            if "Email cannot be empty" in msg:
-                errors[field] = "Email cannot be empty"
-            elif "Password cannot be empty" in msg:
-                errors[field] = "Password cannot be empty"
-            elif "Token cannot be empty" in msg:
-                errors[field] = "Token cannot be empty"
-            elif "Email format is invalid" in msg:
-                errors[field] = "Email format is invalid. Use format: user@example.com"
-            elif "Password must be at least 8 characters" in msg:
-                errors[field] = "Password must be at least 8 characters"
-            elif "Password must contain at least one uppercase letter" in msg:
-                errors[field] = "Password must contain at least one uppercase letter (A-Z)"
-            elif "Password must contain at least one number" in msg:
-                errors[field] = "Password must contain at least one number (0-9)"
-            elif "and" in msg and "Password" in msg:
-                errors[field] = msg
-            else:
-                errors[field] = msg
-
-        else:
-            errors[field] = msg
+        except (KeyError, TypeError, IndexError):
+            # Handle malformed error objects gracefully
+            errors["validation"] = "Invalid validation error format"
 
     return errors, 422
 
@@ -151,9 +180,18 @@ def format_exception_response(exception: AuthException) -> dict:
     """
     Format custom exception into HTTP response.
     """
-    return {
-        "success": False,
-        "message": exception.message,
-        "error_code": exception.error_code,
-        "details": exception.details
-    }
+    try:
+        return {
+            "success": False,
+            "message": getattr(exception, 'message', str(exception)),
+            "error_code": getattr(exception, 'error_code', 'UNKNOWN_ERROR'),
+            "details": getattr(exception, 'details', {})
+        }
+    except Exception:
+        # Fallback response if exception formatting fails
+        return {
+            "success": False,
+            "message": "An error occurred",
+            "error_code": "FORMATTING_ERROR",
+            "details": {}
+        }

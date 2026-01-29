@@ -1,7 +1,7 @@
 """User database model."""
 
 from sqlalchemy import Column, Integer, String, Boolean, DateTime
-from datetime import datetime
+from datetime import datetime, timezone
 from app.database.base import Base
 
 
@@ -16,5 +16,5 @@ class User(Base):
     verification_token = Column(String, nullable=True, unique=True)
     reset_token = Column(String, nullable=True, unique=True)
     reset_token_expires_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

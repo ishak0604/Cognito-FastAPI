@@ -18,11 +18,12 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, hashed: str) -> bool:
     """Verify password against hashed password."""
     try:
+        logger.info("Attempting password verification")
         is_valid = pwd_context.verify(password, hashed)
         if is_valid:
-            logger.debug("Password verification successful")
+            logger.info("Password verification successful")
         else:
-            logger.warning("Password verification failed")
+            logger.info("Password verification failed - invalid credentials")
         return is_valid
     except Exception as e:
         logger.error(f"Error verifying password: {str(e)}")
