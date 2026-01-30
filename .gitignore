@@ -1,6 +1,7 @@
-# Keep generated Cognito env out of version control
-/devops/cognito.env
-# Keep local parameter file out of version control
-/devops/.env
-# Remove any committed virtualenv
-/fastapi-env/
+# Append ignore lines if not present
+grep -qxF "devops/.env" .gitignore || echo "devops/.env" >> .gitignore
+grep -qxF "devops/cognito.env" .gitignore || echo "devops/cognito.env" >> .gitignore
+grep -qxF ".env" .gitignore || echo ".env" >> .gitignore
+
+git add .gitignore
+git commit -m "Ignore local devops/.env and generated devops/cognito.env and root .env"
