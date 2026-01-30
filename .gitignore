@@ -4,4 +4,4 @@ grep -qxF "devops/cognito.env" .gitignore || echo "devops/cognito.env" >> .gitig
 grep -qxF ".env" .gitignore || echo ".env" >> .gitignore
 
 git add .gitignore
-git commit -m "Ignore local devops/.env and generated devops/cognito.env and root .env"
+git commit -m "Ignore local devops/.env and generated devops/cognito.env and root .env"devops/cognito.env
