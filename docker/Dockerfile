@@ -1,4 +1,3 @@
-# Lightweight FastAPI image tuned for low CPU/memory dev usage
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

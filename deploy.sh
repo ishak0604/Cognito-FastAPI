@@ -23,7 +23,7 @@ if [ -f "${ENV_FILE}" ]; then
   set +o allexport
 fi
 
-AWS_REGION="${AWS_REGION:-ap-south-1}"
+AWS_REGION="${AWS_REGION:-us-east-1}"
 AWS_PROFILE="${AWS_PROFILE:-}"
 DOMAIN_PREFIX="${DOMAIN_PREFIX:-}"
 EMAIL_IDENTITY_ARN="${EMAIL_IDENTITY_ARN:-}"

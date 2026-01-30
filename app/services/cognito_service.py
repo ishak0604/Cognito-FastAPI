@@ -1,243 +1,94 @@
-"""AWS Cognito service for authentication and user management."""
-
+import os
+import base64
 import logging
 import requests
-from typing import Dict, Any, Optional
-from datetime import datetime, timedelta
-import jwt
-from jwt import PyJWKClient
-
-from app.core.config import settings, get_cognito_jwks
-from app.database.models.user import User
-from app.database.session import get_db
-from sqlalchemy.orm import Session
+from urllib.parse import urlencode
 
 logger = logging.getLogger(__name__)
 
+COGNITO_CLIENT_ID = os.getenv("COGNITO_CLIENT_ID")
+COGNITO_CLIENT_SECRET = os.getenv("COGNITO_CLIENT_SECRET")
+COGNITO_DOMAIN = os.getenv("COGNITO_DOMAIN")  # e.g. https://<prefix>.auth.<region>.amazoncognito.com
+COGNITO_USER_POOL_ID = os.getenv("COGNITO_USER_POOL_ID")
+COGNITO_REGION = os.getenv("COGNITO_REGION", "us-east-1")
+
+# Helper: return Authorization header for client auth (Basic)
+def _client_auth_header():
+    if not COGNITO_CLIENT_ID or not COGNITO_CLIENT_SECRET:
+        return {}
+    client_creds = f"{COGNITO_CLIENT_ID}:{COGNITO_CLIENT_SECRET}"
+    b64 = base64.b64encode(client_creds.encode()).decode()
+    return {"Authorization": f"Basic {b64}"}
 
 class CognitoService:
-    """AWS Cognito service for authentication"""
-
     def __init__(self):
-        self.user_pool_id = settings.COGNITO_USER_POOL_ID
-        self.client_id = settings.COGNITO_CLIENT_ID
-        self.client_secret = settings.COGNITO_CLIENT_SECRET
-        self.region = settings.COGNITO_REGION
-        self.domain = settings.COGNITO_DOMAIN
-        self.jwks_url = get_cognito_jwks()
+        if not COGNITO_DOMAIN:
+            raise RuntimeError("COGNITO_DOMAIN must be set")
+        self.domain = COGNITO_DOMAIN.rstrip("/")
 
-        # Initialize JWKS client for token verification
-        self.jwks_client = PyJWKClient(self.jwks_url)
-
-    def verify_cognito_token(self, token: str) -> Optional[Dict[str, Any]]:
-        """Verify JWT token from Cognito and return decoded payload."""
-        try:
-            # Get the signing key from JWKS
-            signing_key = self.jwks_client.get_signing_key_from_jwt(token)
-
-            # Decode and verify the token
-            payload = jwt.decode(
-                token,
-                signing_key.key,
-                algorithms=["RS256"],
-                audience=self.client_id,
-                issuer=f"https://cognito-idp.{self.region}.amazonaws.com/{self.user_pool_id}"
-            )
-
-            return payload
-
-        except jwt.ExpiredSignatureError:
-            logger.warning("Token has expired")
-            return None
-        except jwt.InvalidTokenError as e:
-            logger.warning(f"Invalid token: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Token verification failed: {e}")
-            return None
-
-    def get_user_info_from_cognito(self, token: str) -> Optional[Dict[str, Any]]:
-        """Get user information from Cognito ID token."""
-        payload = self.verify_cognito_token(token)
-        if not payload:
-            return None
-
-        return {
-            "sub": payload.get("sub"),
-            "email": payload.get("email"),
-            "email_verified": payload.get("email_verified", False),
-            "given_name": payload.get("given_name"),
-            "family_name": payload.get("family_name"),
-            "preferred_username": payload.get("preferred_username"),
-            "cognito_username": payload.get("cognito:username")
+    def get_cognito_login_url(self, redirect_uri: str):
+        # Construct the hosted UI authorization URL (authorization code flow)
+        params = {
+            "client_id": COGNITO_CLIENT_ID,
+            "response_type": "code",
+            "scope": "openid+email+profile",
+            "redirect_uri": redirect_uri,
         }
+        url = f"{self.domain}/oauth2/authorize?{urlencode(params)}"
+        return url
 
-    def get_cognito_login_url(self, redirect_uri: str = "http://localhost:8000/api/v1/auth/callback") -> str:
-        """Return Cognito login page URL."""
-        return (
-            f"{self.domain}/oauth2/authorize?"
-            f"client_id={self.client_id}&"
-            f"response_type=code&"
-            f"scope=openid+email+profile&"
-            f"redirect_uri={redirect_uri}"
-        )
-
-    def exchange_code_for_tokens(self, code: str, redirect_uri: str = "http://localhost:8000/api/v1/auth/callback") -> Optional[Dict[str, Any]]:
-        """Exchange authorization code for access, ID, and refresh tokens."""
+    def exchange_code_for_tokens(self, code: str, redirect_uri: str):
+        """
+        Exchange authorization code for tokens via Cognito /oauth2/token.
+        Returns parsed JSON containing access_token,id_token,refresh_token,expires_in,token_type
+        """
+        token_url = f"{self.domain}/oauth2/token"
+        data = {
+            "grant_type": "authorization_code",
+            "client_id": COGNITO_CLIENT_ID,
+            "code": code,
+            "redirect_uri": redirect_uri
+        }
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        # Add client secret using HTTP Basic if present
+        headers.update(_client_auth_header())
+        r = requests.post(token_url, data=urlencode(data), headers=headers, timeout=10)
         try:
-            token_url = f"{self.domain}/oauth2/token"
-
-            data = {
-                "grant_type": "authorization_code",
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-                "code": code,
-                "redirect_uri": redirect_uri
-            }
-
-            headers = {
-                "Content-Type": "application/x-www-form-urlencoded"
-            }
-
-            response = requests.post(token_url, data=data, headers=headers)
-            response.raise_for_status()
-
-            tokens = response.json()
-
-            # Decode ID token to get user info
-            id_token_payload = self.verify_cognito_token(tokens["id_token"])
-            if not id_token_payload:
-                return None
-
-            return {
-                "access_token": tokens["access_token"],
-                "id_token": tokens["id_token"],
-                "refresh_token": tokens.get("refresh_token"),
-                "token_type": tokens["token_type"],
-                "expires_in": tokens["expires_in"],
-                "user_info": {
-                    "sub": id_token_payload.get("sub"),
-                    "email": id_token_payload.get("email"),
-                    "email_verified": id_token_payload.get("email_verified", False),
-                    "given_name": id_token_payload.get("given_name"),
-                    "family_name": id_token_payload.get("family_name"),
-                    "preferred_username": id_token_payload.get("preferred_username"),
-                    "cognito_username": id_token_payload.get("cognito:username")
-                }
-            }
-
-        except requests.RequestException as e:
-            logger.error(f"Token exchange failed: {e}")
-            return None
+            r.raise_for_status()
         except Exception as e:
-            logger.error(f"Unexpected error during token exchange: {e}")
-            return None
-
-    def refresh_cognito_token(self, refresh_token: str) -> Optional[Dict[str, Any]]:
-        """Refresh access token using refresh token."""
-        try:
-            token_url = f"{self.domain}/oauth2/token"
-
-            data = {
-                "grant_type": "refresh_token",
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-                "refresh_token": refresh_token
-            }
-
-            headers = {
-                "Content-Type": "application/x-www-form-urlencoded"
-            }
-
-            response = requests.post(token_url, data=data, headers=headers)
-            response.raise_for_status()
-
-            tokens = response.json()
-
-            return {
-                "access_token": tokens["access_token"],
-                "id_token": tokens.get("id_token"),
-                "token_type": tokens["token_type"],
-                "expires_in": tokens["expires_in"]
-            }
-
-        except requests.RequestException as e:
-            logger.error(f"Token refresh failed: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Unexpected error during token refresh: {e}")
-            return None
-
-    def revoke_cognito_token(self, token: str) -> bool:
-        """Revoke access token."""
-        try:
-            revoke_url = f"{self.domain}/oauth2/revoke"
-
-            data = {
-                "token": token,
-                "client_id": self.client_id,
-                "client_secret": self.client_secret
-            }
-
-            headers = {
-                "Content-Type": "application/x-www-form-urlencoded"
-            }
-
-            response = requests.post(revoke_url, data=data, headers=headers)
-            response.raise_for_status()
-
-            logger.info("Token revoked successfully")
-            return True
-
-        except requests.RequestException as e:
-            logger.error(f"Token revocation failed: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error during token revocation: {e}")
-            return False
-
-    def handle_cognito_user_sync(self, cognito_user: Dict[str, Any], db: Session) -> User:
-        """Create or update local user record from Cognito user info."""
-        try:
-            # Check if user exists by cognito_sub
-            user = db.query(User).filter(User.cognito_sub == cognito_user["sub"]).first()
-
-            if user:
-                # Update existing user
-                user.email = cognito_user["email"]
-                user.is_verified = cognito_user.get("email_verified", False)
-                user.first_name = cognito_user.get("given_name")
-                user.last_name = cognito_user.get("family_name")
-                user.cognito_email_verified = cognito_user.get("email_verified", False)
-                user.updated_at = datetime.utcnow()
-            else:
-                # Create new user
-                user = User(
-                    cognito_sub=cognito_user["sub"],
-                    email=cognito_user["email"],
-                    first_name=cognito_user.get("given_name"),
-                    last_name=cognito_user.get("family_name"),
-                    is_verified=cognito_user.get("email_verified", False),
-                    cognito_email_verified=cognito_user.get("email_verified", False),
-                    authentication_method="cognito",
-                    password_hash=None,  # No password for Cognito users
-                    verification_token=None,  # Already verified by Cognito
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow()
-                )
-                db.add(user)
-
-            db.commit()
-            db.refresh(user)
-
-            logger.info(f"User synced successfully: {user.email}")
-            return user
-
-        except Exception as e:
-            db.rollback()
-            logger.error(f"User sync failed: {e}")
+            logger.error("Token exchange failed: %s %s", r.status_code, r.text)
             raise
+        return r.json()
 
+    def get_userinfo(self, access_token: str):
+        """
+        Retrieve user info from /oauth2/userInfo endpoint.
+        """
+        userinfo_url = f"{self.domain}/oauth2/userInfo"
+        headers = {"Authorization": f"Bearer {access_token}"}
+        r = requests.get(userinfo_url, headers=headers, timeout=10)
+        r.raise_for_status()
+        return r.json()
 
-# Global instance
+    def handle_cognito_user_sync(self, user_info: dict, db):
+        """
+        Sync Cognito user info to your DB. Adapt to your models.
+        - user_info typically contains 'sub', 'email', 'email_verified', 'name' etc.
+        Return the DB user instance.
+        """
+        # Example pseudo-code (adapt for your models and session):
+        # from app.database.models.user import User
+        # user = db.query(User).filter(User.cognito_sub == user_info["sub"]).first()
+        # if not user:
+        #     user = User(email=user_info.get("email"), cognito_sub=user_info.get("sub"), is_verified=user_info.get("email_verified", False))
+        #     db.add(user)
+        # else:
+        #     user.email = user_info.get("email", user.email)
+        #     user.is_verified = user_info.get("email_verified", user.is_verified)
+        # db.commit()
+        # return user
+        # If you don't want DB sync, simply return user_info dict.
+        return user_info
+
+# Export a singleton
 cognito_service = CognitoService()
