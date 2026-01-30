@@ -1,94 +1,219 @@
-import os
-import base64
+import boto3
+from typing import Optional, Dict, Any
+from botocore.exceptions import ClientError
+from app.core.config import settings
 import logging
-import requests
-from urllib.parse import urlencode
 
 logger = logging.getLogger(__name__)
 
-COGNITO_CLIENT_ID = os.getenv("COGNITO_CLIENT_ID")
-COGNITO_CLIENT_SECRET = os.getenv("COGNITO_CLIENT_SECRET")
-COGNITO_DOMAIN = os.getenv("COGNITO_DOMAIN")  # e.g. https://<prefix>.auth.<region>.amazoncognito.com
-COGNITO_USER_POOL_ID = os.getenv("COGNITO_USER_POOL_ID")
-COGNITO_REGION = os.getenv("COGNITO_REGION", "us-east-1")
-
-# Helper: return Authorization header for client auth (Basic)
-def _client_auth_header():
-    if not COGNITO_CLIENT_ID or not COGNITO_CLIENT_SECRET:
-        return {}
-    client_creds = f"{COGNITO_CLIENT_ID}:{COGNITO_CLIENT_SECRET}"
-    b64 = base64.b64encode(client_creds.encode()).decode()
-    return {"Authorization": f"Basic {b64}"}
-
 class CognitoService:
+    """AWS Cognito service for authentication and user management"""
+
     def __init__(self):
-        if not COGNITO_DOMAIN:
-            raise RuntimeError("COGNITO_DOMAIN must be set")
-        self.domain = COGNITO_DOMAIN.rstrip("/")
+        if not settings.USE_COGNITO:
+            return
+        self.client = boto3.client('cognito-idp', region_name=settings.AWS_REGION)
+        self.user_pool_id = settings.COGNITO_USER_POOL_ID
+        self.client_id = settings.COGNITO_CLIENT_ID
 
-    def get_cognito_login_url(self, redirect_uri: str):
-        # Construct the hosted UI authorization URL (authorization code flow)
-        params = {
-            "client_id": COGNITO_CLIENT_ID,
-            "response_type": "code",
-            "scope": "openid+email+profile",
-            "redirect_uri": redirect_uri,
-        }
-        url = f"{self.domain}/oauth2/authorize?{urlencode(params)}"
-        return url
-
-    def exchange_code_for_tokens(self, code: str, redirect_uri: str):
-        """
-        Exchange authorization code for tokens via Cognito /oauth2/token.
-        Returns parsed JSON containing access_token,id_token,refresh_token,expires_in,token_type
-        """
-        token_url = f"{self.domain}/oauth2/token"
-        data = {
-            "grant_type": "authorization_code",
-            "client_id": COGNITO_CLIENT_ID,
-            "code": code,
-            "redirect_uri": redirect_uri
-        }
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        # Add client secret using HTTP Basic if present
-        headers.update(_client_auth_header())
-        r = requests.post(token_url, data=urlencode(data), headers=headers, timeout=10)
+    def sign_up(self, email: str, password: str) -> Dict[str, Any]:
+        """Sign up a new user with Cognito"""
         try:
-            r.raise_for_status()
-        except Exception as e:
-            logger.error("Token exchange failed: %s %s", r.status_code, r.text)
-            raise
-        return r.json()
+            response = self.client.sign_up(
+                ClientId=self.client_id,
+                Username=email,
+                Password=password,
+                UserAttributes=[
+                    {
+                        'Name': 'email',
+                        'Value': email
+                    }
+                ]
+            )
+            return {
+                'success': True,
+                'message': 'User signed up successfully. Please check your email for verification code.',
+                'user_id': response['UserSub'],
+                'email': email
+            }
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            if error_code == 'UsernameExistsException':
+                return {'success': False, 'message': 'User already exists'}
+            elif error_code == 'InvalidPasswordException':
+                return {'success': False, 'message': 'Password does not meet requirements'}
+            elif error_code == 'InvalidParameterException':
+                return {'success': False, 'message': 'Invalid email format'}
+            else:
+                return {'success': False, 'message': f'Signup failed: {e.response["Error"]["Message"]}'}
 
-    def get_userinfo(self, access_token: str):
-        """
-        Retrieve user info from /oauth2/userInfo endpoint.
-        """
-        userinfo_url = f"{self.domain}/oauth2/userInfo"
-        headers = {"Authorization": f"Bearer {access_token}"}
-        r = requests.get(userinfo_url, headers=headers, timeout=10)
-        r.raise_for_status()
-        return r.json()
+    def confirm_sign_up(self, email: str, confirmation_code: str) -> Dict[str, Any]:
+        """Confirm user signup with verification code"""
+        try:
+            self.client.confirm_sign_up(
+                ClientId=self.client_id,
+                Username=email,
+                ConfirmationCode=confirmation_code
+            )
 
-    def handle_cognito_user_sync(self, user_info: dict, db):
-        """
-        Sync Cognito user info to your DB. Adapt to your models.
-        - user_info typically contains 'sub', 'email', 'email_verified', 'name' etc.
-        Return the DB user instance.
-        """
-        # Example pseudo-code (adapt for your models and session):
-        # from app.database.models.user import User
-        # user = db.query(User).filter(User.cognito_sub == user_info["sub"]).first()
-        # if not user:
-        #     user = User(email=user_info.get("email"), cognito_sub=user_info.get("sub"), is_verified=user_info.get("email_verified", False))
-        #     db.add(user)
-        # else:
-        #     user.email = user_info.get("email", user.email)
-        #     user.is_verified = user_info.get("email_verified", user.is_verified)
-        # db.commit()
-        # return user
-        # If you don't want DB sync, simply return user_info dict.
-        return user_info
+            # After confirmation, initiate auth to get tokens
+            auth_result = self.admin_initiate_auth(email, "")
+            if auth_result['success']:
+                return {
+                    'success': True,
+                    'message': 'Account verified successfully',
+                    'access_token': auth_result['access_token'],
+                    'refresh_token': auth_result.get('refresh_token', ''),
+                    'user': {
+                        'email': email,
+                        'email_verified': True
+                    }
+                }
+            else:
+                return {
+                    'success': True,
+                    'message': 'Account verified successfully. Please login to continue.',
+                    'user': {
+                        'email': email,
+                        'email_verified': True
+                    }
+                }
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            if error_code == 'CodeMismatchException':
+                return {'success': False, 'message': 'Invalid verification code'}
+            elif error_code == 'ExpiredCodeException':
+                return {'success': False, 'message': 'Verification code has expired'}
+            elif error_code == 'NotAuthorizedException':
+                return {'success': False, 'message': 'User is already confirmed'}
+            else:
+                return {'success': False, 'message': f'Confirmation failed: {e.response["Error"]["Message"]}'}
 
-# Export a singleton
+    def resend_confirmation_code(self, email: str) -> Dict[str, Any]:
+        """Resend confirmation code"""
+        try:
+            self.client.resend_confirmation_code(
+                ClientId=self.client_id,
+                Username=email
+            )
+            return {
+                'success': True,
+                'message': 'Verification code sent successfully'
+            }
+        except ClientError as e:
+            return {'success': False, 'message': f'Failed to resend code: {e.response["Error"]["Message"]}'}
+
+    def admin_initiate_auth(self, email: str, password: str) -> Dict[str, Any]:
+        """Authenticate user with Cognito (admin method)"""
+        try:
+            response = self.client.admin_initiate_auth(
+                UserPoolId=self.user_pool_id,
+                ClientId=self.client_id,
+                AuthFlow='ADMIN_NO_SRP_AUTH',
+                AuthParameters={
+                    'USERNAME': email,
+                    'PASSWORD': password
+                }
+            )
+
+            auth_result = response.get('AuthenticationResult', {})
+            return {
+                'success': True,
+                'access_token': auth_result.get('AccessToken', ''),
+                'refresh_token': auth_result.get('RefreshToken', ''),
+                'expires_in': auth_result.get('ExpiresIn', 3600)
+            }
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            if error_code == 'NotAuthorizedException':
+                return {'success': False, 'message': 'Invalid email or password'}
+            elif error_code == 'UserNotFoundException':
+                return {'success': False, 'message': 'User not found'}
+            elif error_code == 'UserNotConfirmedException':
+                return {'success': False, 'message': 'Please verify your email first'}
+            else:
+                return {'success': False, 'message': f'Login failed: {e.response["Error"]["Message"]}'}
+
+    def forgot_password(self, email: str) -> Dict[str, Any]:
+        """Initiate forgot password flow"""
+        try:
+            self.client.forgot_password(
+                ClientId=self.client_id,
+                Username=email
+            )
+            return {
+                'success': True,
+                'message': 'Password reset code sent to your email'
+            }
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            if error_code == 'UserNotFoundException':
+                return {'success': False, 'message': 'User not found'}
+            elif error_code == 'InvalidParameterException':
+                return {'success': False, 'message': 'Invalid email format'}
+            else:
+                return {'success': False, 'message': f'Failed to send reset code: {e.response["Error"]["Message"]}'}
+
+    def confirm_forgot_password(self, email: str, confirmation_code: str, new_password: str) -> Dict[str, Any]:
+        """Confirm forgot password with new password"""
+        try:
+            self.client.confirm_forgot_password(
+                ClientId=self.client_id,
+                Username=email,
+                ConfirmationCode=confirmation_code,
+                Password=new_password
+            )
+            return {
+                'success': True,
+                'message': 'Password reset successfully'
+            }
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            if error_code == 'CodeMismatchException':
+                return {'success': False, 'message': 'Invalid reset code'}
+            elif error_code == 'ExpiredCodeException':
+                return {'success': False, 'message': 'Reset code has expired'}
+            elif error_code == 'InvalidPasswordException':
+                return {'success': False, 'message': 'Password does not meet requirements'}
+            else:
+                return {'success': False, 'message': f'Password reset failed: {e.response["Error"]["Message"]}'}
+
+    def verify_token(self, token: str) -> Optional[Dict[str, Any]]:
+        """Verify JWT token and return user info"""
+        try:
+            response = self.client.get_user(AccessToken=token)
+            return {
+                'email': next(attr['Value'] for attr in response['UserAttributes'] if attr['Name'] == 'email'),
+                'sub': response['Username'],
+                'email_verified': next((attr['Value'] for attr in response['UserAttributes'] if attr['Name'] == 'email_verified'), 'false') == 'true'
+            }
+        except ClientError:
+            return None
+
+    def get_user_info(self, access_token: str) -> Optional[Dict[str, Any]]:
+        """Get user information from access token"""
+        return self.verify_token(access_token)
+
+    def refresh_token(self, refresh_token: str) -> Dict[str, Any]:
+        """Refresh access token using refresh token"""
+        try:
+            response = self.client.admin_initiate_auth(
+                UserPoolId=self.user_pool_id,
+                ClientId=self.client_id,
+                AuthFlow='REFRESH_TOKEN_AUTH',
+                AuthParameters={
+                    'REFRESH_TOKEN': refresh_token
+                }
+            )
+
+            auth_result = response.get('AuthenticationResult', {})
+            return {
+                'success': True,
+                'access_token': auth_result.get('AccessToken', ''),
+                'expires_in': auth_result.get('ExpiresIn', 3600)
+            }
+        except ClientError as e:
+            return {'success': False, 'message': f'Token refresh failed: {e.response["Error"]["Message"]}'}
+
+# Global instance
 cognito_service = CognitoService()

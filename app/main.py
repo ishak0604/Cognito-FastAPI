@@ -3,7 +3,6 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from app.api.v1.router import api_router
-from app.exceptions import format_validation_errors
 
 # Configure minimal logging for memory efficiency
 logging.basicConfig(level=logging.WARNING)
@@ -20,17 +19,24 @@ app = FastAPI(
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """
     Handle Pydantic validation errors with user-friendly format.
-    
+
     This is called when:
     - Missing required fields
     - Invalid field format
     - Type validation fails
     - Custom validators fail
     """
-    errors, status_code = format_validation_errors(exc.errors())
-    
+    # Simple error formatting since we removed custom format function
+    errors = []
+    for error in exc.errors():
+        errors.append({
+            "field": ".".join(str(loc) for loc in error["loc"]),
+            "message": error["msg"],
+            "type": error["type"]
+        })
+
     return JSONResponse(
-        status_code=status_code,
+        status_code=422,
         content={
             "success": False,
             "message": "Validation error",
@@ -43,25 +49,8 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 @app.on_event("startup")
 async def on_startup():
     """Initialize application on startup."""
-    logger.info("Application starting up")
-    try:
-        # Lazy import for faster startup
-        from app.database.base import Base
-        from app.database.session import engine
-        
-        logger.info("Initializing database tables")
-        Base.metadata.create_all(bind=engine)
-        logger.info("Application startup completed successfully")
-    except ImportError as e:
-        logger.error(f"Database import failed: {e}")
-        raise
-    except Exception as e:
-        logger.error(f"Database initialization failed: {e}")
-        raise
+    logger.info("Application starting up - using AWS Cognito for authentication")
+    logger.info("Application startup completed successfully")
 
 
 app.include_router(api_router)
-
-# Add health check endpoints
-from app.api.v1.endpoints.health import router as health_router
-app.include_router(health_router)

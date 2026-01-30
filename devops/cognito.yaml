@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Cognito User Pool + App Client + Domain + SES send-role + SecretsManager secret.
+  Cognito User Pool + App Client for signup, confirm signup, login, forgot password, reset password endpoints.
   Tags: Project=Learning will be applied to relevant resources.
 
 Parameters:
@@ -12,40 +12,9 @@ Parameters:
     Type: String
     Default: fastapi-auth-pool
     Description: Cognito User Pool name
-  DomainPrefix:
-    Type: String
-    Description: Cognito domain prefix (must be unique), e.g. fastapi-auth-yourname
-  CallbackURLs:
-    Type: String
-    Description: Comma-separated callback URLs (e.g. http://localhost:8000/api/v1/auth/callback)
-    Default: "http://localhost:8000/api/v1/auth/callback"
-  LogoutURLs:
-    Type: String
-    Description: Comma-separated sign out URLs (e.g. http://localhost:3000/logout)
-    Default: "http://localhost:3000/logout"
   EmailIdentityArn:
     Type: String
     Description: SES identity ARN (arn:aws:ses:<region>:<account-id>:identity/your-email)
-  GoogleClientId:
-    Type: String
-    Default: ""
-    Description: (optional) Google OAuth client id
-  GoogleClientSecret:
-    Type: String
-    Default: ""
-    Description: (optional) Google OAuth client secret
-  FacebookAppId:
-    Type: String
-    Default: ""
-    Description: (optional) Facebook App Id
-  FacebookAppSecret:
-    Type: String
-    Default: ""
-    Description: (optional) Facebook App Secret
-
-Conditions:
-  HasGoogle: !Not [ !Equals [ !Ref GoogleClientId, "" ] ]
-  HasFacebook: !Not [ !Equals [ !Ref FacebookAppId, "" ] ]
 
 Resources:
 
@@ -55,7 +24,6 @@ Resources:
       UserPoolName: !Ref UserPoolName
       AutoVerifiedAttributes:
         - email
-      MfaConfiguration: OPTIONAL
       Policies:
         PasswordPolicy:
           MinimumLength: 8
@@ -78,27 +46,12 @@ Resources:
     Properties:
       ClientName: fastapi-app
       UserPoolId: !Ref CognitoUserPool
-      GenerateSecret: true
-      AllowedOAuthFlows:
-        - code
-      AllowedOAuthScopes:
-        - openid
-        - email
-        - profile
-      AllowedOAuthFlowsUserPoolClient: true
-      CallbackURLs: !Split [",", !Ref CallbackURLs]
-      LogoutURLs: !Split [",", !Ref LogoutURLs]
-      SupportedIdentityProviders:
-        - COGNITO
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ADMIN_NO_SRP_AUTH
       PreventUserExistenceErrors: ENABLED
       Tags:
         Project: Learning
-
-  CognitoUserPoolDomain:
-    Type: AWS::Cognito::UserPoolDomain
-    Properties:
-      Domain: !Ref DomainPrefix
-      UserPoolId: !Ref CognitoUserPool
 
   CognitoSesSendRole:
     Type: AWS::IAM::Role
@@ -128,75 +81,11 @@ Resources:
         - Key: Project
           Value: Learning
 
-  DatabaseCredentialsSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: !Sub "${UserPoolName}/db-credentials-${Env}"
-      Description: "Postgres credentials for dev environment (generated). Keep secret; used by app."
-      GenerateSecretString:
-        SecretStringTemplate: '{"username":"postgres"}'
-        GenerateStringKey: "password"
-        PasswordLength: 32
-        ExcludePunctuation: true
-      Tags:
-        - Key: Project
-          Value: Learning
-
-  CognitoGoogleProvider:
-    Type: AWS::Cognito::UserPoolIdentityProviderGoogle
-    Condition: HasGoogle
-    Properties:
-      ProviderName: Google
-      UserPoolId: !Ref CognitoUserPool
-      ClientId: !Ref GoogleClientId
-      ClientSecret: !Ref GoogleClientSecret
-      ProviderDetails:
-        authorize_scopes: "openid email profile"
-      AttributeMapping:
-        email: email
-        username: sub
-      Tags:
-        - Key: Project
-          Value: Learning
-
-  CognitoFacebookProvider:
-    Type: AWS::Cognito::UserPoolIdentityProviderFacebook
-    Condition: HasFacebook
-    Properties:
-      ProviderName: Facebook
-      UserPoolId: !Ref CognitoUserPool
-      ClientId: !Ref FacebookAppId
-      ClientSecret: !Ref FacebookAppSecret
-      ProviderDetails:
-        authorize_scopes: "email public_profile"
-      AttributeMapping:
-        email: email
-        username: id
-      Tags:
-        - Key: Project
-          Value: Learning
-
 Outputs:
   UserPoolId:
     Description: "Cognito User Pool ID"
     Value: !Ref CognitoUserPool
 
-  UserPoolArn:
-    Description: "Cognito User Pool ARN"
-    Value: !GetAtt [CognitoUserPool, Arn]
-
   AppClientId:
     Description: "Cognito App Client ID"
     Value: !Ref CognitoUserPoolClient
-
-  AppClientSecret:
-    Description: "Cognito App Client secret (if available via CFN outputs)"
-    Value: !GetAtt [CognitoUserPoolClient, ClientSecret]
-
-  DomainURL:
-    Description: "Cognito hosted UI domain"
-    Value: !Sub "https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com"
-
-  DatabaseSecretArn:
-    Description: "Secrets Manager secret ARN for DB credentials"
-    Value: !Ref DatabaseCredentialsSecret
