@@ -21,7 +21,6 @@ services:
       retries: 3
       start_period: 60s
     restart: unless-stopped
-    # CPU and Memory limits for optimization
     deploy:
       resources:
         limits:
@@ -36,7 +35,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/api.Dockerfile
     container_name: fastapi_api
     ports:
       - "8000:8000"
@@ -44,6 +43,7 @@ services:
       postgres:
         condition: service_healthy
     env_file:
+      - devops/cognito.env
       - .env
     environment:
       - DATABASE_URL=postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-fastapi_db}
@@ -53,13 +53,12 @@ services:
     volumes:
       - ./app:/app/app:ro
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
       interval: 120s
       timeout: 30s
       retries: 3
       start_period: 120s
     restart: unless-stopped
-    # Aggressive memory limits for stability
     deploy:
       resources:
         limits:

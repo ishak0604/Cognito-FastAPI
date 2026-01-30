@@ -1,0 +1,184 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Cognito User Pool with Social Login for FastAPI Application'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: Learning
+    Description: Project name for tagging
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+
+  CallbackURL:
+    Type: String
+    Default: 'http://localhost:8000/api/v1/auth/callback'
+    Description: OAuth callback URL
+
+  LogoutURL:
+    Type: String
+    Default: 'http://localhost:3000/logout'
+    Description: Logout URL
+
+  GoogleClientId:
+    Type: String
+    Default: 'your-google-client-id'
+    Description: Google OAuth Client ID
+
+  GoogleClientSecret:
+    Type: String
+    Default: 'your-google-client-secret'
+    Description: Google OAuth Client Secret
+
+  FacebookClientId:
+    Type: String
+    Default: 'your-facebook-client-id'
+    Description: Facebook OAuth Client ID
+
+  FacebookClientSecret:
+    Type: String
+    Default: 'your-facebook-client-secret'
+    Description: Facebook OAuth Client Secret
+
+Resources:
+  # Cognito User Pool
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub '${ProjectName}-${Environment}-user-pool'
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: false
+          RequireNumbers: true
+          RequireSymbols: false
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+        - Name: given_name
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+        - Name: family_name
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+      UserPoolTags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  # Google Identity Provider
+  GoogleIdentityProvider:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+    Properties:
+      UserPoolId: !Ref CognitoUserPool
+      ProviderName: Google
+      ProviderType: Google
+      ProviderDetails:
+        client_id: !Ref GoogleClientId
+        client_secret: !Ref GoogleClientSecret
+        authorize_scopes: 'email profile openid'
+      AttributeMapping:
+        email: 'email'
+        given_name: 'given_name'
+        family_name: 'family_name'
+
+  # Facebook Identity Provider
+  FacebookIdentityProvider:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+    Properties:
+      UserPoolId: !Ref CognitoUserPool
+      ProviderName: Facebook
+      ProviderType: Facebook
+      ProviderDetails:
+        client_id: !Ref FacebookClientId
+        client_secret: !Ref FacebookClientSecret
+        authorize_scopes: 'public_profile email'
+      AttributeMapping:
+        email: 'email'
+        given_name: 'given_name'
+        family_name: 'family_name'
+
+  # Cognito User Pool Client
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref CognitoUserPool
+      ClientName: !Sub '${ProjectName}-${Environment}-client'
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ADMIN_NO_SRP_AUTH
+        - USER_SRP_AUTH
+      SupportedIdentityProviders:
+        - COGNITO
+        - Google
+        - Facebook
+      CallbackURLs:
+        - !Ref CallbackURL
+      LogoutURLs:
+        - !Ref LogoutURL
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - email
+        - openid
+        - profile
+      AllowedOAuthFlowsUserPoolClient: true
+
+  # IAM Role for Cognito operations
+  CognitoRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-cognito-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cognito-idp.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonCognitoPowerUser
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref CognitoUserPool
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-user-pool-id'
+
+  UserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !Ref CognitoUserPoolClient
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-user-pool-client-id'
+
+  LoginURL:
+    Description: Cognito Hosted UI Login URL
+    Value: !Sub 'https://${AWS::Region}.auth.amazoncognito.com/login?client_id=${CognitoUserPoolClient}&response_type=code&scope=email+openid+profile&redirect_uri=${CallbackURL}'
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-login-url'
+
+  LogoutURL:
+    Description: Cognito Logout URL
+    Value: !Sub 'https://${AWS::Region}.auth.amazoncognito.com/logout?client_id=${CognitoUserPoolClient}&logout_uri=${LogoutURL}'
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-logout-url'
