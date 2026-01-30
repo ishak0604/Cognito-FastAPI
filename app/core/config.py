@@ -37,9 +37,8 @@ class Settings(BaseSettings):
     )
     DEBUG: bool = Field(default=False, description="Debug mode")
     LOG_LEVEL: str = Field(default="INFO", description="Logging level")
-    
+
     # AWS Cognito Configuration
-    AWS_REGION: str = Field(default="us-east-1", description="AWS region")
     COGNITO_USER_POOL_ID: str = Field(
         default="",
         description="Cognito User Pool ID"
@@ -48,10 +47,20 @@ class Settings(BaseSettings):
         default="",
         description="Cognito User Pool Client ID"
     )
-    USE_COGNITO: bool = Field(
-        default=False,
-        description="Enable Cognito authentication"
+    COGNITO_CLIENT_SECRET: str = Field(
+        default="",
+        description="Cognito User Pool Client Secret"
     )
+    COGNITO_REGION: str = Field(
+        default="us-east-1",
+        description="AWS region for Cognito"
+    )
+    COGNITO_DOMAIN: str = Field(
+        default="",
+        description="Cognito domain URL"
+    )
+    
+
     
     @validator("SECRET_KEY")
     def validate_secret_key(cls, v: str) -> str:
@@ -96,3 +105,41 @@ def get_settings() -> Settings:
 
 # Global settings instance
 settings = get_settings()
+
+
+def get_cognito_jwks() -> str:
+    """Get Cognito JWKS URL for token verification."""
+    return f"https://cognito-idp.{settings.COGNITO_REGION}.amazonaws.com/{settings.COGNITO_USER_POOL_ID}/.well-known/jwks.json"
+
+
+def get_cognito_config() -> Dict[str, str]:
+    """Return all Cognito configuration settings."""
+    return {
+        "user_pool_id": settings.COGNITO_USER_POOL_ID,
+        "client_id": settings.COGNITO_CLIENT_ID,
+        "client_secret": settings.COGNITO_CLIENT_SECRET,
+        "region": settings.COGNITO_REGION,
+        "domain": settings.COGNITO_DOMAIN,
+        "jwks_url": get_cognito_jwks()
+    }
+
+
+def validate_cognito_connection() -> bool:
+    """Test connection to Cognito by fetching JWKS."""
+    try:
+        import requests
+        jwks_url = get_cognito_jwks()
+        response = requests.get(jwks_url, timeout=10)
+        response.raise_for_status()
+
+        jwks = response.json()
+        if "keys" in jwks and len(jwks["keys"]) > 0:
+            logger.info("Cognito connection validated successfully")
+            return True
+        else:
+            logger.error("Invalid JWKS response from Cognito")
+            return False
+
+    except Exception as e:
+        logger.error(f"Cognito connection validation failed: {e}")
+        return False

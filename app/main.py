@@ -1,47 +1,19 @@
 import logging
-import time
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 from app.api.v1.router import api_router
 from app.exceptions import format_validation_errors
 
-# Configure logging
+# Configure minimal logging for memory efficiency
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Production FastAPI Auth Service")
-
-
-class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """Optimized middleware for request logging."""
-    
-    # Pre-compile path set for faster lookup
-    SKIP_PATHS = {"/health", "/docs", "/openapi.json", "/favicon.ico"}
-    
-    async def dispatch(self, request: Request, call_next):
-        # Fast path check - skip logging for static/health endpoints
-        if request.url.path in self.SKIP_PATHS:
-            return await call_next(request)
-        
-        # Process request with minimal overhead
-        start_time = time.perf_counter()
-        response = await call_next(request)
-        
-        # Only log if there's an issue (error or performance problem)
-        if response.status_code >= 400:
-            process_time = time.perf_counter() - start_time
-            logger.error(
-                f"{request.method} {request.url.path} - {response.status_code} ({process_time:.2f}s)"
-            )
-        elif time.perf_counter() - start_time > 2.0:  # Only log very slow requests
-            logger.warning(f"Slow request: {request.method} {request.url.path} ({time.perf_counter() - start_time:.2f}s)")
-        
-        return response
-
-
-# Add request/response logging middleware
-app.add_middleware(RequestLoggingMiddleware)
+app = FastAPI(
+    title="Production FastAPI Auth Service",
+    docs_url=None,  # Disable docs in production for memory savings
+    redoc_url=None
+)
 
 
 @app.exception_handler(RequestValidationError)

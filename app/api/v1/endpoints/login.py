@@ -1,5 +1,6 @@
-"""Login-related endpoints with improved structure."""
+"""Login-related endpoints with local authentication."""
 
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -8,12 +9,13 @@ from app.schemas.auth_schemas import LoginRequest, SuccessResponse, ErrorRespons
 from app.services.user_auth_service import get_user_auth_service, UserAuthService
 from app.exceptions import AuthException
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
 @router.post(
-    "/login", 
-    response_model=SuccessResponse, 
+    "/login",
+    response_model=SuccessResponse,
     status_code=200,
     summary="User Login",
     description="Authenticate user with email and password",
@@ -26,28 +28,28 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
     }
 )
 def login(
-    payload: LoginRequest, 
+    payload: LoginRequest,
     auth_service: UserAuthService = Depends(get_user_auth_service)
 ) -> SuccessResponse:
     """Authenticate user and return access token.
-    
+
     Args:
         payload: Login request with email and password
         auth_service: User authentication service
-        
+
     Returns:
         Success response with access token
-        
+
     Raises:
         HTTPException: If authentication fails
     """
     try:
         result = auth_service.login_user(payload.email, payload.password)
         return SuccessResponse(**result)
-        
+
     except AuthException as e:
         raise HTTPException(
-            status_code=e.status_code, 
+            status_code=e.status_code,
             detail={
                 "success": False,
                 "message": e.message,
@@ -57,7 +59,7 @@ def login(
         )
     except Exception as e:
         raise HTTPException(
-            status_code=500, 
+            status_code=500,
             detail={
                 "success": False,
                 "message": "An unexpected error occurred",
