@@ -1,6 +1,7 @@
 from pydantic import BaseModel, EmailStr, field_validator
-import re
+from typing import Optional
 from uuid import UUID
+import re
 
 
 class SignUpSchema(BaseModel):
@@ -50,8 +51,8 @@ class ResetPasswordSchema(BaseModel):
 
 class UserResponse(BaseModel):
     id: UUID
-    email: str
-    role: str
+    email: Optional[str]  # Allow None
+    role: Optional[str]   # Allow None
 
     class Config:
         orm_mode = True
