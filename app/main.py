@@ -1,23 +1,44 @@
 import logging
+import time
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_router
-from app.database import Base, engine   # DB
-from app.models import user             # registers model
+from app.database import Base, engine
+from app.models import user  # registers model
 
-# Configure minimal logging
-logging.basicConfig(level=logging.INFO)
+# ---------------- LOGGING CONFIG ----------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
 logger = logging.getLogger(__name__)
 
+# ---------------- FASTAPI INIT ----------------
 app = FastAPI(
     title="Production FastAPI Auth Service",
     docs_url=None,
-    redoc_url=None
+    redoc_url=None,
 )
 
+# ---------------- REQUEST LOGGING MIDDLEWARE ----------------
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.time()
 
+    response = await call_next(request)
+
+    duration = round(time.time() - start_time, 3)
+    logger.info(
+        f"{request.method} {request.url.path} "
+        f"Status:{response.status_code} Time:{duration}s"
+    )
+
+    return response
+
+
+# ---------------- VALIDATION ERROR HANDLER ----------------
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     errors = []
@@ -39,13 +60,14 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-# Creates tables automatically
+# ---------------- STARTUP EVENT ----------------
 @app.on_event("startup")
 async def on_startup():
-    logger.info("Creating database tables...")
+    logger.info("🚀 Starting FastAPI Auth Service...")
+    logger.info("📦 Creating database tables...")
     Base.metadata.create_all(bind=engine)
-    logger.info("Database ready")
+    logger.info("✅ Database ready")
 
 
-# Include API router with prefix
+# ---------------- ROUTERS ----------------
 app.include_router(api_router, prefix="/api/v1")

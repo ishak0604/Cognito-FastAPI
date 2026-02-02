@@ -1,13 +1,11 @@
 from jose import jwt
 import requests
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request, status, Depends
 from app.core.config import settings
 
-JWKS_URL = (
-    f"https://cognito-idp.{settings.AWS_REGION}.amazonaws.com/"
-    f"{settings.COGNITO_USER_POOL_ID}/.well-known/jwks.json"
-)
+JWKS_URL = f"https://cognito-idp.{settings.AWS_REGION}.amazonaws.com/{settings.COGNITO_USER_POOL_ID}/.well-known/jwks.json"
 jwks = requests.get(JWKS_URL).json()
+
 
 def verify_jwt(token: str):
     try:
@@ -23,20 +21,29 @@ def verify_jwt(token: str):
             issuer=f"https://cognito-idp.{settings.AWS_REGION}.amazonaws.com/{settings.COGNITO_USER_POOL_ID}",
         )
         return payload
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid or expired token: {str(e)}"
-        )
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
 
 def get_current_user(request: Request):
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-    token = auth_header.split(" ")[1]
+    auth = request.headers.get("Authorization")
+    if not auth or not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    token = auth.split(" ")[1]
     payload = verify_jwt(token)
+
     return {
         "user_id": payload.get("sub"),
         "email": payload.get("email"),
-        "claims": payload,
+        "claims": payload
     }
+
+
+# 🔐 RBAC dependency
+def require_role(role: str):
+    def role_checker(current_user=Depends(get_current_user)):
+        if current_user["claims"].get("custom:role", "user") != role:
+            raise HTTPException(status_code=403, detail="Not enough permissions")
+        return current_user
+    return role_checker

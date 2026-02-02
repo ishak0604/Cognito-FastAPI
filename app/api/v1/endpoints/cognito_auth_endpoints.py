@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Response, HTTPException
+from fastapi import APIRouter, Response, HTTPException, Request
 from app.services import cognito_service as cs
 from app.schemas.auth_schemas import *
 from app.core.config import settings
@@ -6,6 +6,7 @@ import requests
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
+# ------------------ SIGNUP / LOGIN ------------------
 
 @router.post("/signup")
 def signup(data: SignUpSchema):
@@ -21,12 +22,26 @@ def confirm_signup(data: ConfirmSchema):
 def login(data: LoginSchema, response: Response):
     tokens = cs.login(data.email, data.password)
 
-    # Secure cookies for production
-    response.set_cookie("access_token", tokens["access_token"], httponly=True, samesite="lax")
-    response.set_cookie("refresh_token", tokens["refresh_token"], httponly=True, samesite="lax")
+    response.set_cookie(
+        "access_token",
+        tokens["access_token"],
+        httponly=True,
+        samesite="lax",
+        secure=False  # True in production with HTTPS
+    )
 
-    return tokens  # return tokens in body too
+    response.set_cookie(
+        "refresh_token",
+        tokens["refresh_token"],
+        httponly=True,
+        samesite="lax",
+        secure=False
+    )
 
+    return {"message": "Login successful"}
+
+
+# ------------------ GOOGLE LOGIN ------------------
 
 @router.get("/google-login")
 def google_login():
@@ -59,22 +74,24 @@ def callback(code: str, response: Response):
         raise HTTPException(400, r.text)
 
     tokens = r.json()
+
     response.set_cookie("access_token", tokens["access_token"], httponly=True)
     response.set_cookie("refresh_token", tokens["refresh_token"], httponly=True)
 
-    return tokens
+    return {"message": "Google login successful"}
 
+
+# ------------------ LOGOUT ------------------
 
 @router.post("/logout")
 def logout(response: Response):
     response.delete_cookie("access_token")
     response.delete_cookie("refresh_token")
-    return {"message": "Logged out"}
-
-
+    return {"message": "Logged out successfully"}
 
 
 # ------------------ PASSWORD FLOWS ------------------
+
 @router.post("/forgot-password")
 def forgot_password(data: ForgotPasswordSchema):
     return cs.forgot_password(data.email)
@@ -83,3 +100,38 @@ def forgot_password(data: ForgotPasswordSchema):
 @router.post("/reset-password")
 def reset_password(data: ResetPasswordSchema):
     return cs.reset_password(data.email, data.otp, data.new_password)
+
+
+# ------------------ TOKEN REFRESH ------------------
+
+@router.post("/refresh")
+def refresh_token(request: Request, response: Response):
+    refresh_token = request.cookies.get("refresh_token")
+
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="Refresh token missing")
+
+    token_url = f"{settings.COGNITO_DOMAIN}/oauth2/token"
+
+    data = {
+        "grant_type": "refresh_token",
+        "client_id": settings.COGNITO_CLIENT_ID,
+        "refresh_token": refresh_token,
+    }
+
+    r = requests.post(token_url, data=data, headers={"Content-Type": "application/x-www-form-urlencoded"})
+
+    if r.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+    tokens = r.json()
+
+    response.set_cookie(
+        "access_token",
+        tokens["access_token"],
+        httponly=True,
+        samesite="lax",
+        secure=False
+    )
+
+    return {"message": "Token refreshed"}
