@@ -2,31 +2,24 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from app.api.v1.router import api_router
 
-# Configure minimal logging for memory efficiency
-logging.basicConfig(level=logging.WARNING)
+from app.api.v1.router import api_router
+from app.database import Base, engine   # ⭐ DB
+from app.models import user             # ⭐ registers model
+
+# Configure minimal logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Production FastAPI Auth Service",
-    docs_url=None,  # Disable docs in production for memory savings
+    docs_url=None,
     redoc_url=None
 )
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """
-    Handle Pydantic validation errors with user-friendly format.
-
-    This is called when:
-    - Missing required fields
-    - Invalid field format
-    - Type validation fails
-    - Custom validators fail
-    """
-    # Simple error formatting since we removed custom format function
     errors = []
     for error in exc.errors():
         errors.append({
@@ -46,11 +39,12 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
+# ⭐ THIS CREATES TABLES AUTOMATICALLY
 @app.on_event("startup")
 async def on_startup():
-    """Initialize application on startup."""
-    logger.info("Application starting up - using AWS Cognito for authentication")
-    logger.info("Application startup completed successfully")
+    logger.info("Creating database tables...")
+    Base.metadata.create_all(bind=engine)
+    logger.info("Database ready")
 
 
 app.include_router(api_router)

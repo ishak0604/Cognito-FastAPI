@@ -1,7 +1,12 @@
-# Append ignore lines if not present
-grep -qxF "devops/.env" .gitignore || echo "devops/.env" >> .gitignore
-grep -qxF "devops/cognito.env" .gitignore || echo "devops/cognito.env" >> .gitignore
-grep -qxF ".env" .gitignore || echo ".env" >> .gitignore
+# ---- ENV FILES (SECRETS) ----
+.env
+*.env
+devops/.env
+devops/cognito.env
 
-git add .gitignore
-git commit -m "Ignore local devops/.env and generated devops/cognito.env and root .env"devops/cognito.env
+
+# ---- BUT KEEP EXAMPLE FILES ----
+!devops/.env.example
+!docker/Dockerfile
+!docker/requirements.txt
+!docker/docker-compose.yml

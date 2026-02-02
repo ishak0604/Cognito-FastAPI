@@ -1,137 +1,100 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# deploy.sh <env>
-# Example:
-#   ./deploy.sh dev
-#
-# Runs `aws cloudformation deploy` inside an aws-cli docker container, then
-# retrieves the CloudFormation outputs and writes devops/cognito.env
-# (permissions: 600). The generated env file is intended for local dev only
-# and should be gitignored.
-
 ENV="${1:-dev}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${ROOT}/devops/.env"
 GENERATED_ENV_FILE="${ROOT}/devops/cognito.env"
 
-if [ -f "${ENV_FILE}" ]; then
-  # shellcheck disable=SC1090
-  set -o allexport
-  # shellcheck source=/dev/null
-  . "${ENV_FILE}"
-  set +o allexport
-fi
+[ -f "${ENV_FILE}" ] && set -o allexport && . "${ENV_FILE}" && set +o allexport
 
-AWS_REGION="${AWS_REGION:-us-east-1}"
+AWS_REGION="${AWS_REGION:-ap-south-1}"
 AWS_PROFILE="${AWS_PROFILE:-}"
-DOMAIN_PREFIX="${DOMAIN_PREFIX:-}"
 EMAIL_IDENTITY_ARN="${EMAIL_IDENTITY_ARN:-}"
 CALLBACK_URLS="${CALLBACK_URLS:-http://localhost:8000/api/v1/auth/callback}"
 LOGOUT_URLS="${LOGOUT_URLS:-http://localhost:3000/logout}"
-GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-}"
-GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:-}"
-FACEBOOK_APP_ID="${FACEBOOK_APP_ID:-}"
-FACEBOOK_APP_SECRET="${FACEBOOK_APP_SECRET:-}"
 
-if [ -z "${DOMAIN_PREFIX}" ] || [ -z "${EMAIL_IDENTITY_ARN}" ]; then
-  echo "ERROR: DOMAIN_PREFIX and EMAIL_IDENTITY_ARN must be set (see devops/.env.example)"
+# 🔥 Make domain unique if not provided
+if [ -z "${DOMAIN_PREFIX:-}" ]; then
+  DOMAIN_PREFIX="fastapi-auth-${ENV}-$(whoami | tr '[:upper:]' '[:lower:]')"
+fi
+
+if [ -z "${EMAIL_IDENTITY_ARN}" ]; then
+  echo "❌ EMAIL_IDENTITY_ARN must be set"
   exit 2
 fi
 
 STACK_NAME="fastapi-auth-cognito-${ENV}"
-TEMPLATE_FILE="devops/cognito.yaml"
-AWS_CLI_IMAGE="amazon/aws-cli:2.17.89"
+TEMPLATE_FILE="devops/cognito/cognito.yaml"
+AWS_CLI_IMAGE="amazon/aws-cli:latest"
 
-echo "Deploying CloudFormation stack: ${STACK_NAME} (region: ${AWS_REGION})"
+echo "🚀 Deploying stack: ${STACK_NAME}"
 
-# Common docker run options (low CPU/memory)
 DOCKER_OPTS=(
   --rm
-  --cpus=0.5
-  --memory=256m
   -v "${ROOT}":/workspace
   -w /workspace
   -e AWS_REGION="${AWS_REGION}"
 )
 
-[ -n "${AWS_ACCESS_KEY_ID:-}" ] && DOCKER_OPTS+=(-e AWS_ACCESS_KEY_ID)
-[ -n "${AWS_SECRET_ACCESS_KEY:-}" ] && DOCKER_OPTS+=(-e AWS_SECRET_ACCESS_KEY)
-[ -n "${AWS_SESSION_TOKEN:-}" ] && DOCKER_OPTS+=(-e AWS_SESSION_TOKEN)
+[ -d "${HOME}/.aws" ] && DOCKER_OPTS+=(-v "${HOME}/.aws":/root/.aws:ro)
 
-# If AWS credentials file exists, mount (~/.aws)
-if [ -d "${HOME}/.aws" ]; then
-  DOCKER_OPTS+=(-v "${HOME}/.aws":/root/.aws:ro)
+# ---------------------------------------------------------
+# 🚫 DO NOT AUTO DELETE COGNITO STACKS
+# ---------------------------------------------------------
+STACK_STATUS="$(docker run "${DOCKER_OPTS[@]}" "${AWS_CLI_IMAGE}" \
+  cloudformation describe-stacks \
+  --stack-name "${STACK_NAME}" \
+  --region "${AWS_REGION}" \
+  --query "Stacks[0].StackStatus" \
+  --output text 2>/dev/null || echo "NOT_FOUND")"
+
+if [[ "${STACK_STATUS}" == "ROLLBACK_COMPLETE" ]]; then
+  echo "❌ Stack in ROLLBACK_COMPLETE."
+  echo "Delete manually ONLY if you are sure:"
+  echo "aws cloudformation delete-stack --stack-name ${STACK_NAME}"
+  exit 3
 fi
 
-[ -n "${AWS_PROFILE}" ] && DOCKER_OPTS+=(-e AWS_PROFILE="${AWS_PROFILE}")
-
-# Build parameter overrides for cloudformation deploy
 PARAMS=(
-  "Env=${ENV}"
-  "DomainPrefix=${DOMAIN_PREFIX}"
-  "CallbackURLs=${CALLBACK_URLS}"
-  "LogoutURLs=${LOGOUT_URLS}"
-  "EmailIdentityArn=${EMAIL_IDENTITY_ARN}"
-  "GoogleClientId=${GOOGLE_CLIENT_ID}"
-  "GoogleClientSecret=${GOOGLE_CLIENT_SECRET}"
-  "FacebookAppId=${FACEBOOK_APP_ID}"
-  "FacebookAppSecret=${FACEBOOK_APP_SECRET}"
+  Environment="${ENV}"
+  DomainPrefix="${DOMAIN_PREFIX}"
+  CallbackURL="${CALLBACK_URLS}"
+  LogoutURL="${LOGOUT_URLS}"
 )
 
-PARAMS_STR="$(printf "%s " "${PARAMS[@]}")"
-
+echo "📦 Deploying CloudFormation..."
 docker run "${DOCKER_OPTS[@]}" "${AWS_CLI_IMAGE}" \
   cloudformation deploy \
     --template-file "${TEMPLATE_FILE}" \
     --stack-name "${STACK_NAME}" \
-    --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
+    --capabilities CAPABILITY_NAMED_IAM \
     --region "${AWS_REGION}" \
-    --parameter-overrides ${PARAMS_STR} \
-    --tags Project=Learning
+    --parameter-overrides "${PARAMS[@]}"
 
-echo "CloudFormation deployment completed. Stack: ${STACK_NAME}"
+echo "✅ Deployment complete"
 
-# Helper to fetch a specific output value (text)
+# ---------------------------------------------------------
+# Fetch outputs
+# ---------------------------------------------------------
 fetch_output() {
-  local key="${1}"
-  docker run --rm "${DOCKER_OPTS[@]}" "${AWS_CLI_IMAGE}" \
+  docker run "${DOCKER_OPTS[@]}" "${AWS_CLI_IMAGE}" \
     cloudformation describe-stacks \
     --stack-name "${STACK_NAME}" \
     --region "${AWS_REGION}" \
-    --query "Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue" \
+    --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
     --output text
 }
 
-USER_POOL_ID="$(fetch_output "UserPoolId")"
-APP_CLIENT_ID="$(fetch_output "AppClientId")"
-DOMAIN_URL="$(fetch_output "DomainURL")"
-DB_SECRET_ARN="$(fetch_output "DatabaseSecretArn")"
+USER_POOL_ID="$(fetch_output UserPoolId)"
+APP_CLIENT_ID="$(fetch_output AppClientId)"
+DOMAIN_URL="$(fetch_output DomainURL)"
 
-# Try to fetch client secret from Cognito API (more reliable than CFN output in some accounts)
-APP_CLIENT_SECRET="$(docker run --rm "${DOCKER_OPTS[@]}" "${AWS_CLI_IMAGE}" \
-  cognito-idp describe-user-pool-client \
-  --user-pool-id "${USER_POOL_ID}" \
-  --client-id "${APP_CLIENT_ID}" \
-  --region "${AWS_REGION}" \
-  --query "UserPoolClient.ClientSecret" \
-  --output text || true )"
-
-# Write env file (do not commit). Use restricted permissions.
 cat > "${GENERATED_ENV_FILE}" <<EOF
-# Generated by deploy.sh - DO NOT COMMIT
 COGNITO_USER_POOL_ID=${USER_POOL_ID}
 COGNITO_CLIENT_ID=${APP_CLIENT_ID}
-COGNITO_CLIENT_SECRET=${APP_CLIENT_SECRET}
 COGNITO_DOMAIN=${DOMAIN_URL}
 COGNITO_REGION=${AWS_REGION}
-
-# Secrets Manager ARN for DB credentials (app should use SDK/role to fetch)
-DATABASE_SECRET_ARN=${DB_SECRET_ARN}
 EOF
 
-chmod 600 "${GENERATED_ENV_FILE}"
-
-echo "Generated env file: ${GENERATED_ENV_FILE} (permissions 600)"
-echo "You can now run docker compose up --build (docker-compose will load devops/cognito.env)."
-echo "Remember: do NOT commit devops/cognito.env to version control."
+echo "📝 Generated: devops/cognito.env"

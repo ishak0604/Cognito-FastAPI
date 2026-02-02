@@ -9,3 +9,7 @@ boto3==1.28.85
 requests==2.31.0
 cryptography==41.0.7
 python-dotenv==1.0.0
+python-jose[cryptography]
+requests
+pydantic-settings
+pydantic[email]
