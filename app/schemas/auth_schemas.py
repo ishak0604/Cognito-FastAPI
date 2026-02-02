@@ -1,5 +1,6 @@
 from pydantic import BaseModel, EmailStr, field_validator
 import re
+from uuid import UUID
 
 
 class SignUpSchema(BaseModel):
@@ -47,7 +48,10 @@ class ResetPasswordSchema(BaseModel):
         return v
 
 
-# ⭐ Response model for authenticated user
 class UserResponse(BaseModel):
-    user_id: str
-    email: EmailStr | None = None
+    id: UUID
+    email: str
+    role: str
+
+    class Config:
+        orm_mode = True
