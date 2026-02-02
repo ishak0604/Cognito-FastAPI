@@ -1,12 +1,13 @@
 from jose import jwt
-from jose.utils import base64url_decode
 import requests
 from fastapi import HTTPException, Request, status
 from app.core.config import settings
 
-JWKS_URL = f"https://cognito-idp.{settings.AWS_REGION}.amazonaws.com/{settings.COGNITO_USER_POOL_ID}/.well-known/jwks.json"
+JWKS_URL = (
+    f"https://cognito-idp.{settings.AWS_REGION}.amazonaws.com/"
+    f"{settings.COGNITO_USER_POOL_ID}/.well-known/jwks.json"
+)
 jwks = requests.get(JWKS_URL).json()
-
 
 def verify_jwt(token: str):
     try:
@@ -22,18 +23,14 @@ def verify_jwt(token: str):
             issuer=f"https://cognito-idp.{settings.AWS_REGION}.amazonaws.com/{settings.COGNITO_USER_POOL_ID}",
         )
         return payload
-
     except Exception:
-        raise HTTPException(401, "Invalid or expired token")
-
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
 def get_current_user(request: Request):
     token = request.cookies.get("access_token")
     if not token:
-        raise HTTPException(401, "Not authenticated")
-
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     payload = verify_jwt(token)
-
     return {
         "user_id": payload.get("sub"),
         "email": payload.get("email"),

@@ -18,7 +18,6 @@ def signup(email: str, password: str):
             UserAttributes=[{"Name": "email", "Value": email}],
         )
         return {"message": "OTP sent to email"}
-
     except ClientError as e:
         raise HTTPException(400, e.response["Error"]["Message"])
 
@@ -44,7 +43,7 @@ def confirm_signup(email: str, otp: str):
             db.add(User(id=sub, email=email))
             db.commit()
 
-        return {"message": "Account verified"}
+        return {"message": "Account verified successfully"}
 
     except ClientError as e:
         db.rollback()
@@ -59,25 +58,26 @@ def login(email: str, password: str):
         res = client.initiate_auth(
             ClientId=settings.COGNITO_CLIENT_ID,
             AuthFlow="USER_PASSWORD_AUTH",
-            AuthParameters={
-                "USERNAME": email,
-                "PASSWORD": password,
-            },
+            AuthParameters={"USERNAME": email, "PASSWORD": password},
         )
 
-        tokens = res["AuthenticationResult"]
+        result = res["AuthenticationResult"]
 
         return {
-            "access_token": tokens["AccessToken"],
-            "refresh_token": tokens.get("RefreshToken"),
-            "id_token": tokens["IdToken"],
+            "access_token": result["AccessToken"],
+            "refresh_token": result.get("RefreshToken"),
+            "id_token": result["IdToken"],
+            "expires_in": result["ExpiresIn"],
         }
 
     except ClientError as e:
         msg = e.response["Error"]["Message"]
 
         if "User is not confirmed" in msg:
-            raise HTTPException(403, "Please confirm your email before login")
+            raise HTTPException(403, "User not confirmed. Verify OTP first.")
+
+        if "security token" in msg.lower():
+            raise HTTPException(401, "AWS credentials expired. Update .env")
 
         raise HTTPException(401, msg)
 

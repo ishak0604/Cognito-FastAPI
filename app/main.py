@@ -4,8 +4,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_router
-from app.database import Base, engine   # ⭐ DB
-from app.models import user             # ⭐ registers model
+from app.database import Base, engine   # DB
+from app.models import user             # registers model
 
 # Configure minimal logging
 logging.basicConfig(level=logging.INFO)
@@ -39,7 +39,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-# ⭐ THIS CREATES TABLES AUTOMATICALLY
+# Creates tables automatically
 @app.on_event("startup")
 async def on_startup():
     logger.info("Creating database tables...")
@@ -47,4 +47,5 @@ async def on_startup():
     logger.info("Database ready")
 
 
-app.include_router(api_router)
+# Include API router with prefix
+app.include_router(api_router, prefix="/api/v1")
