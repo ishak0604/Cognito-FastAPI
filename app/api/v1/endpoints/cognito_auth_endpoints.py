@@ -23,25 +23,13 @@ def confirm_signup(data: ConfirmSchema):
 
 
 # ------------------ LOGIN (API) ------------------
+
 @router.post("/login")
 def login(data: LoginSchema, response: Response):
     tokens = cs.login(data.email, data.password)
 
-    response.set_cookie(
-        key="access_token",
-        value=tokens["access_token"],
-        httponly=True,
-        secure=False,
-        samesite="lax"
-    )
-
-    response.set_cookie(
-        key="refresh_token",
-        value=tokens["refresh_token"],
-        httponly=True,
-        secure=False,
-        samesite="lax"
-    )
+    response.set_cookie("access_token", tokens["access_token"], httponly=True, samesite="lax")
+    response.set_cookie("refresh_token", tokens["refresh_token"], httponly=True, samesite="lax")
 
     return {"message": "Login successful"}
 
@@ -92,7 +80,8 @@ def callback(code: str, response: Response):
 @router.post("/logout")
 def logout(response: Response):
     response.delete_cookie("access_token")
-    return {"message": "Logged out successfully"}
+    response.delete_cookie("refresh_token")
+    return {"message": "Logged out"}
 
 
 
