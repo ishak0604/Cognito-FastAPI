@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Cognito User Pool for FastAPI App (Email + Google)
+Description: Cognito User Pool for FastAPI App (Email + Google + RBAC)
 
 Parameters:
   ProjectName:
@@ -40,25 +40,33 @@ Resources:
       AutoVerifiedAttributes: [email]
       UsernameAttributes: [email]
 
-      AccountRecoverySetting:
-        RecoveryMechanisms:
-          - Name: verified_email
-            Priority: 1
-
       Policies:
         PasswordPolicy:
           MinimumLength: 8
           RequireUppercase: true
           RequireNumbers: true
-          RequireLowercase: false
-          RequireSymbols: false
 
+  # ---------------- RBAC GROUPS ----------------
+  AdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: admin
+      UserPoolId: !Ref CognitoUserPool
+
+  UserGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: user
+      UserPoolId: !Ref CognitoUserPool
+
+  # ---------------- DOMAIN ----------------
   CognitoDomain:
     Type: AWS::Cognito::UserPoolDomain
     Properties:
       Domain: !Ref DomainPrefix
       UserPoolId: !Ref CognitoUserPool
 
+  # ---------------- GOOGLE LOGIN ----------------
   GoogleIdP:
     Type: AWS::Cognito::UserPoolIdentityProvider
     Condition: UseGoogle
@@ -75,25 +83,21 @@ Resources:
         given_name: given_name
         family_name: family_name
 
+  # ---------------- APP CLIENT ----------------
   CognitoUserPoolClient:
     Type: AWS::Cognito::UserPoolClient
-    DependsOn:
-      - CognitoDomain
+    DependsOn: CognitoDomain
     Properties:
       UserPoolId: !Ref CognitoUserPool
       ClientName: !Sub '${ProjectName}-${Environment}-client'
       GenerateSecret: false
 
       ExplicitAuthFlows:
-        - ALLOW_USER_PASSWORD_AUTH
         - ALLOW_REFRESH_TOKEN_AUTH
         - ALLOW_USER_SRP_AUTH
 
       SupportedIdentityProviders:
-        !If
-          - UseGoogle
-          - [COGNITO, Google]
-          - [COGNITO]
+        !If [UseGoogle, [COGNITO, Google], [COGNITO]]
 
       CallbackURLs:
         - !Ref CallbackURL
@@ -115,9 +119,3 @@ Outputs:
 
   DomainURL:
     Value: !Sub "https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com"
-
-  HostedUILoginURL:
-    Value: !Sub "https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com/login?client_id=${CognitoUserPoolClient}&response_type=code&scope=openid+email+profile&redirect_uri=${CallbackURL}"
-
-  HostedUILogoutURL:
-    Value: !Sub "https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com/logout?client_id=${CognitoUserPoolClient}&logout_uri=${LogoutURL}"

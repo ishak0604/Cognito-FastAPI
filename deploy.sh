@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${ROOT}/devops/.env"
 GENERATED_ENV_FILE="${ROOT}/devops/cognito.env"
 
+# Load .env if present
 [ -f "${ENV_FILE}" ] && set -o allexport && . "${ENV_FILE}" && set +o allexport
 
 AWS_REGION="${AWS_REGION:-ap-south-1}"
@@ -13,6 +14,7 @@ AWS_PROFILE="${AWS_PROFILE:-}"
 EMAIL_IDENTITY_ARN="${EMAIL_IDENTITY_ARN:-}"
 CALLBACK_URLS="${CALLBACK_URLS:-http://localhost:8000/api/v1/auth/callback}"
 LOGOUT_URLS="${LOGOUT_URLS:-http://localhost:3000/logout}"
+ADMIN_EMAIL="${ADMIN_EMAIL:-}"
 
 # 🔥 Make domain unique if not provided
 if [ -z "${DOMAIN_PREFIX:-}" ]; then
@@ -40,7 +42,7 @@ DOCKER_OPTS=(
 [ -d "${HOME}/.aws" ] && DOCKER_OPTS+=(-v "${HOME}/.aws":/root/.aws:ro)
 
 # ---------------------------------------------------------
-# 🚫 DO NOT AUTO DELETE COGNITO STACKS
+# 🚫 Prevent accidental stack deletion
 # ---------------------------------------------------------
 STACK_STATUS="$(docker run "${DOCKER_OPTS[@]}" "${AWS_CLI_IMAGE}" \
   cloudformation describe-stacks \
@@ -98,3 +100,20 @@ COGNITO_REGION=${AWS_REGION}
 EOF
 
 echo "📝 Generated: devops/cognito.env"
+
+# ---------------------------------------------------------
+# 👑 AUTO ASSIGN ADMIN ROLE
+# ---------------------------------------------------------
+if [ -n "${ADMIN_EMAIL}" ]; then
+  echo "👑 Assigning ${ADMIN_EMAIL} to admin group..."
+
+  docker run "${DOCKER_OPTS[@]}" "${AWS_CLI_IMAGE}" \
+    cognito-idp admin-add-user-to-group \
+    --user-pool-id "${USER_POOL_ID}" \
+    --username "${ADMIN_EMAIL}" \
+    --group-name admin \
+    --region "${AWS_REGION}" \
+    || echo "⚠️ User not found yet. Login once, then rerun deploy."
+fi
+
+echo "🎉 Cognito setup complete"

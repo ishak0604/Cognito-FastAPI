@@ -31,6 +31,15 @@ def login(data: LoginSchema, response: Response):
     )
 
     response.set_cookie(
+    "id_token",
+    tokens["id_token"],
+    httponly=True,
+    samesite="lax",
+    secure=False
+    )
+
+
+    response.set_cookie(
         "refresh_token",
         tokens["refresh_token"],
         httponly=True,
@@ -77,6 +86,14 @@ def callback(code: str, response: Response):
 
     response.set_cookie("access_token", tokens["access_token"], httponly=True)
     response.set_cookie("refresh_token", tokens["refresh_token"], httponly=True)
+    response.set_cookie(
+    "id_token",
+    tokens["id_token"],
+    httponly=True,
+    samesite="lax",
+    secure=False
+    )
+
 
     return {"message": "Google login successful"}
 
@@ -86,8 +103,17 @@ def callback(code: str, response: Response):
 @router.post("/logout")
 def logout(response: Response):
     response.delete_cookie("access_token")
+    response.delete_cookie("id_token")
     response.delete_cookie("refresh_token")
-    return {"message": "Logged out successfully"}
+
+    return {
+        "logout_url": (
+            f"{settings.COGNITO_DOMAIN}/logout?"
+            f"client_id={settings.COGNITO_CLIENT_ID}"
+            f"&logout_uri={settings.LOGOUT_URL}"
+        )
+    }
+
 
 
 # ------------------ PASSWORD FLOWS ------------------
@@ -133,5 +159,14 @@ def refresh_token(request: Request, response: Response):
         samesite="lax",
         secure=False
     )
+
+    response.set_cookie(
+    "id_token",
+    tokens["id_token"],
+    httponly=True,
+    samesite="lax",
+    secure=False
+    )
+
 
     return {"message": "Token refreshed"}

@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends
-from app.core.security import require_role
+from app.core.security import RoleChecker
+
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
 
-@router.get("/dashboard")
-def admin_dashboard(user=Depends(require_role("admin"))):
-    return {"message": "Welcome Admin"}
+@router.get("/admin-data")
+def admin_data(user=Depends(RoleChecker(["admin"]))):
+    return {"msg": "Welcome admin"}
+
